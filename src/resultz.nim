@@ -1,159 +1,6 @@
-import std/[macros]
+import std/[macros, strutils, strformat]
 import ./vendor/results
 export results
-
-#[
-TODO: add support for nnkCommand
-
-proc doThing(): Result[string, string]
-  result.err "failure :("
-match doThing():
-  Ok item:
-    echo item
-  Err msg:
-    echo "failure!" msg
-
-expand to support Opt
-proc doOptionalThing(): Opt[string] =
-  result.ok "worked"
-match doOptionalThing():
-  Some(val):
-    echo val
-]#
-
-macro match*(results: untyped, node: untyped): untyped =
-  ## It can be used like a general `case` branch, but expect `Result` as the first argument.
-  ##
-  ## Use `_` ident for the return value discard.
-  ##
-  ## `ident` is not required for `void` type.
-  ##
-  ## ```
-  ## func example(): Result[string, void] =
-  ##   ok("something is ok")
-  ##
-  ## match example():
-  ##   Ok(someOk):
-  ##     assert someOk == "something is ok"
-  ##   # not required an ident
-  ##   Err():
-  ##     break
-  ##```
-  ##
-  ## Assign a content of `Result` directly from `match` to a variable:
-  ##
-  ## ```nim
-  ## func greet(name: string): Result[string, string] =
-  ##   if name.len > 0:
-  ##     return ok("hi, " & name)
-  ##
-  ##   return err("No name? 😐")
-  ##
-  ## let msg: string = match greet "Nim":
-  ##   Ok(greet):
-  ##     greet
-  ##   # discard an error content
-  ##   Err(_):
-  ##     "Oh no! something went wrong 😨"
-  ##
-  ##  assert msg == "hi, Nim"
-  ## ```
-  ## modified from the original implementation found [here](https://github.com/nonnil/resultsutils)
-
-
-  expectKind results, { nnkCall, nnkIdent, nnkCommand, nnkDotExpr, nnkStmtListExpr, nnkSym, nnkOpenSymChoice, nnkClosedSymChoice }
-  expectKind node, nnkStmtList
-
-  type
-    ResultKind = enum
-      Ok
-      Err
-
-  # TODO: simplify this handling to be parseEnum based
-  func parseResultKind(node: NimNode): ResultKind =
-    # a case label. expect `Ok` or `Err`.
-    expectKind node, { nnkIdent, nnkSym, nnkOpenSymChoice, nnkClosedSymChoice }
-    if node.kind == nnkIdent:
-      case $node
-      of "Ok": return Ok
-      of "Err": return Err
-      else:
-        error "Only \"Err\" and \"Ok\" are allowed as case labels"
-
-    else:
-      case $node
-      of "OK", "Ok": return Ok
-      of "ERR", "Err": return Err
-      else:
-        error "Only \"Err\" and \"Ok\" are allowed as case labels"
-
-  var
-    okIdent, okBody: NimNode
-    errIdent, errBody: NimNode
-
-  for child in node:
-    expectKind child, nnkCall
-
-    # expectKind child[1], { nnkIdent, nnkSym, nnkOpenSymChoice, nnkClosedSymChoice, nnkStmtList }
-
-    let resultType = parseResultKind(child[0])
-    var resultIdent, body: NimNode = nil
-
-    # an ident
-    if child[1].kind in { nnkIdent, nnkTupleConstr, nnkSym, nnkOpenSymChoice, nnkClosedSymChoice }:
-      # a body
-      expectKind child[2], { nnkStmtList, nnkOpenSymChoice, nnkClosedSymChoice }
-      resultIdent =
-        if child[1].kind == nnkIdent: child[1]
-        else: ident($child[1])
-        # elif child[1].kind in { nnkSym, nnkOpenSymChoice, nnkClosedSymChoice }: ident($child[1])
-
-      body = child[2]
-
-    # if ident is not passed on
-    else:
-      expectKind child[1], { nnkStmtList, nnkOpenSymChoice, nnkClosedSymChoice }
-      body = child[1]
-
-    case resultType
-    of Ok:
-      okIdent =
-        if (resultIdent.isNil) or ($resultIdent == "_"): nil
-        else: resultIdent
-      okBody = body
-
-    of Err:
-      errIdent =
-        if (resultIdent.isNil) or ($resultIdent == "_"): nil
-        else: resultIdent
-      errBody = body
-
-  let
-    tmp = genSym(nskLet)
-    getSym = bindSym"get"
-    errorSym = bindSym"error"
-
-    # ignore assign if the ident is `_` or nil
-    okAssign =
-      if okIdent.isNil: newEmptyNode()
-      else: quote do:
-        let `okIdent` = `getSym`(`tmp`)
-
-    # ignore assign if the ident is `_` or nil
-    errAssign =
-      if errIdent.isNil: newEmptyNode()
-      else: quote do:
-        let `errIdent` = `errorSym`(`tmp`)
-
-  result = quote do:
-    let `tmp` = `results`
-    if `tmp`.isOk:
-      `okAssign`
-      `okBody`
-
-    else:
-      `errAssign`
-      `errBody`
 
 template exceptErr*(m: string) =
   return err(m & "\n" & getCurrentException().msg)
@@ -165,5 +12,105 @@ template maybe*(m: string, body: untyped) =
   except:
     exceptErr m
 
+type
+  Branch = enum
+    Ok, Some, Err, None
+
+func branchKind(n: NimNode): Branch =
+  expectKind n, { nnkCall, nnkCommand, nnkIdent}
+  case n.kind
+  of nnkCall:
+    result = parseEnum[Branch]($n[0])
+  of nnkCommand:
+    result = parseEnum[Branch]($n[0])
+  of nnkIdent:
+    result = parseEnum[Branch]($n)
+  else: assert false
+
+macro `case`*(n: Result): untyped =
+  result = newStmtList()
+
+  let resultType = getTypeInst(n[0])
+  var T, E: NimNode
+
+  # This looks hacky and will probably break in some cases
+  T = resultType[1]
+  let isOpt = $resultType[0] == "Opt"
+  if isOpt:
+    E = ident"void"
+  else:
+    E = resultType[2]
+
+  let
+    tmp = genSym(nskLet)
+    getSym = bindSym"get"
+    errorSym = bindSym"error"
+
+  result.add newLetStmt(tmp, n[0])
+
+  template checkIdent =
+    if it[0].len != 2:
+        error fmt"expected ident for {bk} branch. to ignore value use `_`"
+
+  var okBranch, errBranch = newTree(nnkStmtList)
+  for i in 1 ..< n.len:
+    let it = n[i]
+
+    case it.kind
+    # TODO: simplify and abstract
+    of nnkOfBranch:
+      let bk = it[0].branchKind
+
+      case bk:
+      of Ok, Some:
+        if bk == Some and T.typeKind == ntyVoid:
+          error "Some should be used with Opt[T isnot void]/Result[T isnot void, void]"
+
+        elif T.typeKind != ntyVoid:
+          checkIdent()
+
+          let okIdent = it[0][1]
+          if $okIdent != "_":
+            okBranch.add quote do:
+              let `okIdent` = `getSym`(`tmp`)
+
+        okBranch.add it[1]
+
+      of None, Err:
+        if bk == None and E.typekind notin {ntyVoid, ntyNone}:
+          error "None should be used with Opt[T isnot void]/Result[T isnot void, void]"
+
+        elif bk == Err and E.typeKind != ntyVoid:
+          checkIdent()
+          let errIdent = it[0][1]
+          if $errIdent != "_":
+            errBranch.add quote do:
+              let `errIdent` = `errorSym`(`tmp`)
+          else:
+            if it[0].len > 1:
+              error fmt"unexpected ident: {it[0][1]} for {bk} branch"
+
+        errBranch.add it[1]
+
+    of nnkElse, nnkElifBranch, nnkElifExpr, nnkElseExpr:
+      error "else branch not supported, expected Ok()/Err() or Some()/None()", it
+    else:
+      error "custom 'case' for Result cannot handle this node", it
+
+  if okBranch.len == 0:
+      error (if isOpt: "Some" else: "Ok") & "() case not handled"
+  if errBranch.len == 0:
+      error (if isOpt: "None" else: "Err") & "() case not handled"
+
+  result.add quote do:
+    if `tmp`.isOk:
+      `okBranch`
+    else:
+      `errBranch`
+
+  result = quote do:
+    block:
+      `result`
 
 {.push raises:[].}
+
