@@ -2,13 +2,24 @@ import std/[macros]
 import ./vendor/results
 export results
 
-# TODO: add support for nnkCommand
-# proc doThing(): Result[string, string]
-# match doThing():
-#   Ok item:
-#     echo item
-#   Err msg:
-#     echo "failure!" msg
+#[
+TODO: add support for nnkCommand
+
+proc doThing(): Result[string, string]
+  result.err "failure :("
+match doThing():
+  Ok item:
+    echo item
+  Err msg:
+    echo "failure!" msg
+
+expand to support Opt
+proc doOptionalThing(): Opt[string] =
+  result.ok "worked"
+match doOptionalThing():
+  Some(val):
+    echo val
+]#
 
 macro match*(results: untyped, node: untyped): untyped =
   ## It can be used like a general `case` branch, but expect `Result` as the first argument.
@@ -153,5 +164,6 @@ template maybe*(m: string, body: untyped) =
     body
   except:
     exceptErr m
+
 
 {.push raises:[].}
