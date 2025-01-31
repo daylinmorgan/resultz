@@ -4,6 +4,297 @@
 #   * Apache v2 license (license terms in the root directory or at http://www.apache.org/licenses/LICENSE-2.0).
 # at your option. This file may not be copied, modified, or distributed except according to those terms.
 
+##[
+
+# Example
+
+```
+import results
+
+# Re-export `results` so that API is always available to users of your module!
+export results
+
+# It's convenient to create an alias - most likely, you'll do just fine
+# with strings or cstrings as error for a start
+
+type R = Result[int, string]
+
+# Once you have a type, use `ok` and `err`:
+
+func works(): R =
+  # ok says it went... ok!
+  R.ok 42
+func fails(): R =
+  # or type it like this, to not repeat the type:
+  result.err "bad luck"
+
+func alsoWorks(): R =
+  # or just use the shortcut - auto-deduced from the return type!
+  ok(24)
+
+if (let w = works(); w.isOk):
+  echo w[], " or use value: ", w.value
+
+# In case you think your callers want to differentiate between errors:
+type
+  Error = enum
+    a, b, c
+  type RE[T] = Result[T, Error]
+
+# You can use the question mark operator to pass errors up the call stack
+func f(): R =
+  let x = ?works() - ?fails()
+  assert false, "will never reach"
+
+# If you provide this exception converter, this exception will be raised on
+# `tryValue`:
+func toException(v: Error): ref CatchableError = (ref CatchableError)(msg: $v)
+try:
+  RE[int].err(a).tryValue()
+except CatchableError:
+  echo "in here!"
+
+# You can use `Opt[T]` as a replacement for `Option` = `Opt` is an alias for
+# `Result[T, void]`, meaning you can use the full `Result` API on it:
+let x = Opt[int].ok(42)
+echo x.get()
+
+# ... or `Result[void, E]` as a replacement for `bool`, providing extra error
+# information!
+let y = Result[void, string].err("computation failed")
+echo y.error()
+
+```
+
+See the tests for more practical examples, specially when working with
+back and forth with the exception world!
+
+# Potential benefits:
+
+* Handling errors becomes explicit and mandatory at the call site -
+  goodbye "out of sight, out of mind"
+* Errors are a visible part of the API - when they change, so must the
+  calling code and compiler will point this out - nice!
+* Errors are a visible part of the API - your fellow programmer is
+  reminded that things actually can go wrong
+* Jives well with Nim `discard`
+* Jives well with the new Defect exception hierarchy, where defects
+  are raised for unrecoverable errors and the rest of the API uses
+  results
+* Error and value return have similar performance characteristics
+* Caller can choose to turn them into exceptions at low cost - flexible
+  for libraries!
+* Mostly relies on simple Nim features - though this library is no
+  exception in that compiler bugs were discovered writing it :)
+
+# Potential costs:
+
+* Handling errors becomes explicit and mandatory - if you'd rather ignore
+  them or just pass them to some catch-all, this is noise
+* When composing operations, value must be lifted before processing,
+  adding potential verbosity / noise (fancy macro, anyone?)
+* There's no call stack captured by default (see also `catch` and
+  `capture`)
+* The extra branching may be more expensive for the non-error path
+  (though this can be minimized with PGO)
+
+The API visibility issue of exceptions can also be solved with
+`{.raises.}` annotations - as of now, the compiler doesn't remind
+you to do so, even though it knows what the right annotation should be.
+`{.raises.}` does not participate in generic typing, making it just as
+verbose but less flexible in some ways, if you want to type it out.
+
+Many system languages make a distinction between errors you want to
+handle and those that are simply bugs or unrealistic to deal with..
+handling the latter will often involve aborting or crashing the funcess -
+reliable systems like Erlang will try to relaunch it.
+
+On the flip side we have dynamic languages like python where there's
+nothing exceptional about exceptions (hello StopIterator). Python is
+rarely used to build reliable systems - its strengths lie elsewhere.
+
+# Exception bridge mode
+
+When the error of a `Result` is an `Exception`, or a `toException` helper
+is present for your error type, the "Exception bridge mode" is
+enabled and instead of raising `ResultError`, `tryValue` will raise the
+given `Exception` on access. `[]` and `value` will continue to raise a
+`Defect`.
+
+This is an experimental feature that may be removed.
+
+# Other languages
+
+Result-style error handling seems pretty popular lately, specially with
+statically typed languages:
+Haskell: https://hackage.haskell.org/package/base-4.11.1.0/docs/Data-Either.html
+Rust: https://doc.rust-lang.org/std/result/enum.Result.html
+Modern C++: https://en.cppreference.com/w/cpp/utility/expected
+More C++: https://github.com/ned14/outcome
+
+Swift is interesting in that it uses a non-exception implementation but
+calls errors exceptions and has lots of syntactic sugar to make them feel
+that way by implicitly passing them up the call chain - with a mandatory
+annotation that function may throw:
+https://developer.apple.com/library/content/documentation/Swift/Conceptual/Swift_Programming_Language/ErrorHandling.html
+
+# Considerations for the error type
+
+* Use a `string` or a `cstring` if you want to provide a diagnostic for
+  the caller without an expectation that they will differentiate between
+  different errors. Callers should never parse the given string!
+* Use an `enum` to provide in-depth errors where the caller is expected
+  to have different logic for different errors
+* Use a complex type to include error-specific meta-data - or make the
+  meta-data collection a visible part of your API in another way - this
+  way it remains discoverable by the caller!
+
+A natural "error API" progression is starting with `Opt[T]`, then
+`Result[T, cstring]`, `Result[T, enum]` and `Result[T, object]` in
+escalating order of complexity.
+
+# Result equivalences with other types
+
+Result allows tightly controlling the amount of information that a
+function gives to the caller:
+
+## `Result[void, void] == bool`
+
+Neither value nor error information, it either worked or didn't. Most
+often used for `proc`:s with side effects.
+
+## `Result[T, void] == Option[T]`
+
+Return value if it worked, else tell the caller it failed. Most often
+used for simple computations.
+
+Works as a replacement for `Option[T]` (aliased as `Opt[T]`)
+
+## `Result[T, E]` -
+
+Return value if it worked, or a statically known piece of information
+when it didn't - most often used when a function can fail in more than
+one way - E is typically a `string` or an `enum`.
+
+## `Result[T, ref E]`
+
+Returning a `ref E` allows introducing dynamically typed error
+information, similar to exceptions.
+
+# Other implemenations in nim
+
+There are other implementations in nim that you might prefer:
+* Either from nimfp: https://github.com/vegansk/nimfp/blob/master/src/fp/either.nim
+* result_type: https://github.com/kapralos/result_type/
+
+`Option` compatibility
+
+`Result[T, void]` is similar to `Option[T]`, except it can be used with
+all `Result` operators and helpers.
+
+One difference is `Option[ref|ptr T]` which disallows `nil` - `Opt[T]`
+allows an "ok" result to hold `nil` - this can be useful when `nil` is
+a valid outcome of a function, but increases complexity for the caller.
+
+# Implementation notes
+
+This implementation is mostly based on the one in rust. Compared to it,
+there are a few differences - if know of creative ways to improve things,
+I'm all ears.
+
+* Rust has the enum variants which lend themselves to nice construction
+  where the full Result type isn't needed: `Err("some error")` doesn't
+  need to know value type - maybe some creative converter or something
+  can deal with this?
+* Nim templates allow us to fail fast without extra effort, meaning the
+  other side of `and`/`or` isn't evaluated unless necessary - nice!
+* Rust uses From traits to deal with result translation as the result
+  travels up the call stack - needs more tinkering - some implicit
+  conversions would be nice here
+* Pattern matching in rust allows convenient extraction of value or error
+  in one go.
+
+# Performance considerations
+
+When returning a Result instead of a simple value, there are a few things
+to take into consideration - in general, we are returning more
+information directly to the caller which has an associated cost.
+
+Result is a value type, thus its performance characteristics
+generally follow the performance of copying the value or error that
+it stores. `Result` would benefit greatly from "move" support in the
+language.
+
+In many cases, these performance costs are negligeable, but nonetheless
+they are important to be aware of, to structure your code in an efficient
+manner:
+
+* Memory overhead
+  Result is stored in memory as a union with a `bool` discriminator -
+  alignment makes it somewhat tricky to give an exact size, but in
+  general, `Result[int, int]` will take up `2*sizeof(int)` bytes:
+  1 `int` for the discriminator and padding, 1 `int` for either the value
+  or the error. The additional size means that returning may take up more
+  registers or spill onto the stack.
+* Loss of RVO
+  Nim does return-value-optimization by rewriting `proc f(): X` into
+  `proc f(result: var X)` - in an expression like `let x = f()`, this
+  allows it to avoid a copy from the "temporary" return value to `x` -
+  when using Result, this copy currently happens always because you need
+  to fetch the value from the Result in a second step: `let x = f().value`
+* Extra copies
+  To avoid spurious evaluation of expressions in templates, we use a
+  temporary variable sometimes - this means an unnecessary copy for some
+  types.
+* Bad codegen
+  When doing RVO, Nim generates poor and slow code: it uses a construct
+  called `genericReset` that will zero-initialize a value using dynamic
+  RTTI - a process that the C compiler subsequently is unable to
+  optimize. This applies to all types, but is exacerbated with Result
+  because of its bigger footprint - this should be fixed in compiler.
+* Double zero-initialization bug
+  Nim has an initialization bug that causes additional poor performance:
+  `var x = f()` will be expanded into `var x; zeroInit(x); f(x)` where
+  `f(x)` will call the slow `genericReset` and zero-init `x` again,
+  unnecessarily.
+
+Comparing `Result` performance to exceptions in Nim is difficult - it
+will depend on the error type used, the frequency at which exceptions
+happen, the amount of error handling code in the application and the
+compiler and backend used.
+
+* the default C backend in nim uses `setjmp` for exception handling -
+  the relative performance of the happy path will depend on the structure
+  of the code: how many exception handlers there are, how much unwinding
+  happens. `setjmp` works by taking a snapshot of the full CPU state and
+  saving it to memory when enterting a try block (or an implict try
+  block, such as is introduced with `defer` and similar constructs).
+* an efficient exception handling mechanism (like the C++ backend or
+  `nlvm`) will usually have a lower cost on the happy path because the
+  value can be returned more efficiently. However, there is still a code
+  and data size increase depending on the specific situation, as well as
+  loss of optimization opportunities to consider.
+* raising an exception is usually (a lot) slower than returning an error
+  through a Result - at raise time, capturing a call stack and allocating
+  memory for the Exception is expensive, so the performance difference
+  comes down to the complexity of the error type used.
+* checking for errors with Result is local branching operation that also
+  happens on the happy path - this may be a cost.
+
+An accurate summary might be that Exceptions are at its most efficient
+when errors are not handled and don't happen.
+
+# Relevant nim bugs
+
+- https://github.com/nim-lang/Nim/issues/13799 - type issues
+- https://github.com/nim-lang/Nim/issues/8745 - genericReset slow
+- https://github.com/nim-lang/Nim/issues/13879 - double-zero-init slow
+- https://github.com/nim-lang/Nim/issues/14318 - generic error raises pragma (fixed in 1.6.14+)
+- https://github.com/nim-lang/Nim/issues/23741 - inefficient codegen for temporaries
+- https://github.com/nim-lang/Nim/issues/20699 (fixed in 2.0.0+)
+
+]##
+
 type
   ResultError*[E] = object of ValueError
     ## Error raised when using `tryValue` value of result when error is set
@@ -16,293 +307,6 @@ type
 
   Result*[T, E] = object
     ## Result type that can hold either a value or an error, but not both
-    ##
-    ## # Example
-    ##
-    ## ```
-    ## import results
-    ##
-    ## # Re-export `results` so that API is always available to users of your module!
-    ## export results
-    ##
-    ## # It's convenient to create an alias - most likely, you'll do just fine
-    ## # with strings or cstrings as error for a start
-    ##
-    ## type R = Result[int, string]
-    ##
-    ## # Once you have a type, use `ok` and `err`:
-    ##
-    ## func works(): R =
-    ##   # ok says it went... ok!
-    ##   R.ok 42
-    ## func fails(): R =
-    ##   # or type it like this, to not repeat the type:
-    ##   result.err "bad luck"
-    ##
-    ## func alsoWorks(): R =
-    ##   # or just use the shortcut - auto-deduced from the return type!
-    ##   ok(24)
-    ##
-    ## if (let w = works(); w.isOk):
-    ##   echo w[], " or use value: ", w.value
-    ##
-    ## # In case you think your callers want to differentiate between errors:
-    ## type
-    ##   Error = enum
-    ##     a, b, c
-    ##   type RE[T] = Result[T, Error]
-    ##
-    ## # You can use the question mark operator to pass errors up the call stack
-    ## func f(): R =
-    ##   let x = ?works() - ?fails()
-    ##   assert false, "will never reach"
-    ##
-    ## # If you provide this exception converter, this exception will be raised on
-    ## # `tryValue`:
-    ## func toException(v: Error): ref CatchableError = (ref CatchableError)(msg: $v)
-    ## try:
-    ##   RE[int].err(a).tryValue()
-    ## except CatchableError:
-    ##   echo "in here!"
-    ##
-    ## # You can use `Opt[T]` as a replacement for `Option` = `Opt` is an alias for
-    ## # `Result[T, void]`, meaning you can use the full `Result` API on it:
-    ## let x = Opt[int].ok(42)
-    ## echo x.get()
-    ##
-    ## # ... or `Result[void, E]` as a replacement for `bool`, providing extra error
-    ## # information!
-    ## let y = Result[void, string].err("computation failed")
-    ## echo y.error()
-    ##
-    ## ```
-    ##
-    ## See the tests for more practical examples, specially when working with
-    ## back and forth with the exception world!
-    ##
-    ## # Potential benefits:
-    ##
-    ## * Handling errors becomes explicit and mandatory at the call site -
-    ##   goodbye "out of sight, out of mind"
-    ## * Errors are a visible part of the API - when they change, so must the
-    ##   calling code and compiler will point this out - nice!
-    ## * Errors are a visible part of the API - your fellow programmer is
-    ##   reminded that things actually can go wrong
-    ## * Jives well with Nim `discard`
-    ## * Jives well with the new Defect exception hierarchy, where defects
-    ##   are raised for unrecoverable errors and the rest of the API uses
-    ##   results
-    ## * Error and value return have similar performance characteristics
-    ## * Caller can choose to turn them into exceptions at low cost - flexible
-    ##   for libraries!
-    ## * Mostly relies on simple Nim features - though this library is no
-    ##   exception in that compiler bugs were discovered writing it :)
-    ##
-    ## # Potential costs:
-    ##
-    ## * Handling errors becomes explicit and mandatory - if you'd rather ignore
-    ##   them or just pass them to some catch-all, this is noise
-    ## * When composing operations, value must be lifted before processing,
-    ##   adding potential verbosity / noise (fancy macro, anyone?)
-    ## * There's no call stack captured by default (see also `catch` and
-    ##   `capture`)
-    ## * The extra branching may be more expensive for the non-error path
-    ##   (though this can be minimized with PGO)
-    ##
-    ## The API visibility issue of exceptions can also be solved with
-    ## `{.raises.}` annotations - as of now, the compiler doesn't remind
-    ## you to do so, even though it knows what the right annotation should be.
-    ## `{.raises.}` does not participate in generic typing, making it just as
-    ## verbose but less flexible in some ways, if you want to type it out.
-    ##
-    ## Many system languages make a distinction between errors you want to
-    ## handle and those that are simply bugs or unrealistic to deal with..
-    ## handling the latter will often involve aborting or crashing the funcess -
-    ## reliable systems like Erlang will try to relaunch it.
-    ##
-    ## On the flip side we have dynamic languages like python where there's
-    ## nothing exceptional about exceptions (hello StopIterator). Python is
-    ## rarely used to build reliable systems - its strengths lie elsewhere.
-    ##
-    ## # Exception bridge mode
-    ##
-    ## When the error of a `Result` is an `Exception`, or a `toException` helper
-    ## is present for your error type, the "Exception bridge mode" is
-    ## enabled and instead of raising `ResultError`, `tryValue` will raise the
-    ## given `Exception` on access. `[]` and `value` will continue to raise a
-    ## `Defect`.
-    ##
-    ## This is an experimental feature that may be removed.
-    ##
-    ## # Other languages
-    ##
-    ## Result-style error handling seems pretty popular lately, specially with
-    ## statically typed languages:
-    ## Haskell: https://hackage.haskell.org/package/base-4.11.1.0/docs/Data-Either.html
-    ## Rust: https://doc.rust-lang.org/std/result/enum.Result.html
-    ## Modern C++: https://en.cppreference.com/w/cpp/utility/expected
-    ## More C++: https://github.com/ned14/outcome
-    ##
-    ## Swift is interesting in that it uses a non-exception implementation but
-    ## calls errors exceptions and has lots of syntactic sugar to make them feel
-    ## that way by implicitly passing them up the call chain - with a mandatory
-    ## annotation that function may throw:
-    ## https://developer.apple.com/library/content/documentation/Swift/Conceptual/Swift_Programming_Language/ErrorHandling.html
-    ##
-    ## # Considerations for the error type
-    ##
-    ## * Use a `string` or a `cstring` if you want to provide a diagnostic for
-    ##   the caller without an expectation that they will differentiate between
-    ##   different errors. Callers should never parse the given string!
-    ## * Use an `enum` to provide in-depth errors where the caller is expected
-    ##   to have different logic for different errors
-    ## * Use a complex type to include error-specific meta-data - or make the
-    ##   meta-data collection a visible part of your API in another way - this
-    ##   way it remains discoverable by the caller!
-    ##
-    ## A natural "error API" progression is starting with `Opt[T]`, then
-    ## `Result[T, cstring]`, `Result[T, enum]` and `Result[T, object]` in
-    ## escalating order of complexity.
-    ##
-    ## # Result equivalences with other types
-    ##
-    ## Result allows tightly controlling the amount of information that a
-    ## function gives to the caller:
-    ##
-    ## ## `Result[void, void] == bool`
-    ##
-    ## Neither value nor error information, it either worked or didn't. Most
-    ## often used for `proc`:s with side effects.
-    ##
-    ## ## `Result[T, void] == Option[T]`
-    ##
-    ## Return value if it worked, else tell the caller it failed. Most often
-    ## used for simple computations.
-    ##
-    ## Works as a replacement for `Option[T]` (aliased as `Opt[T]`)
-    ##
-    ## ## `Result[T, E]` -
-    ##
-    ## Return value if it worked, or a statically known piece of information
-    ## when it didn't - most often used when a function can fail in more than
-    ## one way - E is typically a `string` or an `enum`.
-    ##
-    ## ## `Result[T, ref E]`
-    ##
-    ## Returning a `ref E` allows introducing dynamically typed error
-    ## information, similar to exceptions.
-    ##
-    ## # Other implemenations in nim
-    ##
-    ## There are other implementations in nim that you might prefer:
-    ## * Either from nimfp: https://github.com/vegansk/nimfp/blob/master/src/fp/either.nim
-    ## * result_type: https://github.com/kapralos/result_type/
-    ##
-    ## `Option` compatibility
-    ##
-    ## `Result[T, void]` is similar to `Option[T]`, except it can be used with
-    ## all `Result` operators and helpers.
-    ##
-    ## One difference is `Option[ref|ptr T]` which disallows `nil` - `Opt[T]`
-    ## allows an "ok" result to hold `nil` - this can be useful when `nil` is
-    ## a valid outcome of a function, but increases complexity for the caller.
-    ##
-    ## # Implementation notes
-    ##
-    ## This implementation is mostly based on the one in rust. Compared to it,
-    ## there are a few differences - if know of creative ways to improve things,
-    ## I'm all ears.
-    ##
-    ## * Rust has the enum variants which lend themselves to nice construction
-    ##   where the full Result type isn't needed: `Err("some error")` doesn't
-    ##   need to know value type - maybe some creative converter or something
-    ##   can deal with this?
-    ## * Nim templates allow us to fail fast without extra effort, meaning the
-    ##   other side of `and`/`or` isn't evaluated unless necessary - nice!
-    ## * Rust uses From traits to deal with result translation as the result
-    ##   travels up the call stack - needs more tinkering - some implicit
-    ##   conversions would be nice here
-    ## * Pattern matching in rust allows convenient extraction of value or error
-    ##   in one go.
-    ##
-    ## # Performance considerations
-    ##
-    ## When returning a Result instead of a simple value, there are a few things
-    ## to take into consideration - in general, we are returning more
-    ## information directly to the caller which has an associated cost.
-    ##
-    ## Result is a value type, thus its performance characteristics
-    ## generally follow the performance of copying the value or error that
-    ## it stores. `Result` would benefit greatly from "move" support in the
-    ## language.
-    ##
-    ## In many cases, these performance costs are negligeable, but nonetheless
-    ## they are important to be aware of, to structure your code in an efficient
-    ## manner:
-    ##
-    ## * Memory overhead
-    ##   Result is stored in memory as a union with a `bool` discriminator -
-    ##   alignment makes it somewhat tricky to give an exact size, but in
-    ##   general, `Result[int, int]` will take up `2*sizeof(int)` bytes:
-    ##   1 `int` for the discriminator and padding, 1 `int` for either the value
-    ##   or the error. The additional size means that returning may take up more
-    ##   registers or spill onto the stack.
-    ## * Loss of RVO
-    ##   Nim does return-value-optimization by rewriting `proc f(): X` into
-    ##   `proc f(result: var X)` - in an expression like `let x = f()`, this
-    ##   allows it to avoid a copy from the "temporary" return value to `x` -
-    ##   when using Result, this copy currently happens always because you need
-    ##   to fetch the value from the Result in a second step: `let x = f().value`
-    ## * Extra copies
-    ##   To avoid spurious evaluation of expressions in templates, we use a
-    ##   temporary variable sometimes - this means an unnecessary copy for some
-    ##   types.
-    ## * Bad codegen
-    ##   When doing RVO, Nim generates poor and slow code: it uses a construct
-    ##   called `genericReset` that will zero-initialize a value using dynamic
-    ##   RTTI - a process that the C compiler subsequently is unable to
-    ##   optimize. This applies to all types, but is exacerbated with Result
-    ##   because of its bigger footprint - this should be fixed in compiler.
-    ## * Double zero-initialization bug
-    ##   Nim has an initialization bug that causes additional poor performance:
-    ##   `var x = f()` will be expanded into `var x; zeroInit(x); f(x)` where
-    ##   `f(x)` will call the slow `genericReset` and zero-init `x` again,
-    ##   unnecessarily.
-    ##
-    ## Comparing `Result` performance to exceptions in Nim is difficult - it
-    ## will depend on the error type used, the frequency at which exceptions
-    ## happen, the amount of error handling code in the application and the
-    ## compiler and backend used.
-    ##
-    ## * the default C backend in nim uses `setjmp` for exception handling -
-    ##   the relative performance of the happy path will depend on the structure
-    ##   of the code: how many exception handlers there are, how much unwinding
-    ##   happens. `setjmp` works by taking a snapshot of the full CPU state and
-    ##   saving it to memory when enterting a try block (or an implict try
-    ##   block, such as is introduced with `defer` and similar constructs).
-    ## * an efficient exception handling mechanism (like the C++ backend or
-    ##   `nlvm`) will usually have a lower cost on the happy path because the
-    ##   value can be returned more efficiently. However, there is still a code
-    ##   and data size increase depending on the specific situation, as well as
-    ##   loss of optimization opportunities to consider.
-    ## * raising an exception is usually (a lot) slower than returning an error
-    ##   through a Result - at raise time, capturing a call stack and allocating
-    ##   memory for the Exception is expensive, so the performance difference
-    ##   comes down to the complexity of the error type used.
-    ## * checking for errors with Result is local branching operation that also
-    ##   happens on the happy path - this may be a cost.
-    ##
-    ## An accurate summary might be that Exceptions are at its most efficient
-    ## when errors are not handled and don't happen.
-    ##
-    ## # Relevant nim bugs
-    ##
-    ## https://github.com/nim-lang/Nim/issues/13799 - type issues
-    ## https://github.com/nim-lang/Nim/issues/8745 - genericReset slow
-    ## https://github.com/nim-lang/Nim/issues/13879 - double-zero-init slow
-    ## https://github.com/nim-lang/Nim/issues/14318 - generic error raises pragma (fixed in 1.6.14+)
-    ## https://github.com/nim-lang/Nim/issues/23741 - inefficient codegen for temporaries
-    ## https://github.com/nim-lang/Nim/issues/20699 (fixed in 2.0.0+)
     # case oResultPrivate: bool
     # of false:
     #   eResultPrivate: E
