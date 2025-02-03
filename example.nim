@@ -1,16 +1,3 @@
-# resultz
-
-like [results](https://github.com/arnetheduck/nim-results/tree/master) but with more pizazz.
-
-add to `.nimble`:
-
-```nim
-requires "https://github.com/daylinmorgan/resultz"
-```
-
-## "pizazz"
-
-```nim
 import resultz # also exports vendored `results`
 
 proc failableThing(a: int): Result[int, string] =
@@ -22,4 +9,3 @@ of Ok(a):
   echo "do something with ident `a`: " & $a
 of Err(e):
   echo "do something with error: " & e
-```
