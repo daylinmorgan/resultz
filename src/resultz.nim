@@ -5,8 +5,25 @@ export results
 template exceptErr*(m: string) =
   return err(m & "\n" & getCurrentException().msg)
 
-template maybe*(m: string, body: untyped) =
-  ## wrapper for try except to swallow compiler error
+template catchMsg*(body: typed): Result[type(body), string] =
+  ## Catch exceptions for body and store them in the Result
+  ##
+  ## ```
+  ## let r = catch: someFuncThatMayRaise()
+  ## ```
+  type R = Result[type(body), string]
+
+  try:
+    when type(body) is void:
+      body
+      R.ok()
+    else:
+      R.ok(body)
+  except CatchableError as eResultPrivate:
+    R.err(eResultPrivate.msg)
+
+template bailMsg*(m: string, body: untyped) =
+  ## wrapper for try except to swallow compiler error and return with err(m)
   try:
     body
   except:
