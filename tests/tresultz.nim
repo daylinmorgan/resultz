@@ -33,6 +33,7 @@ suite "caseStmt":
     of Err(e):
       check e == "failed!"
 
+  test "some/none":
     case f2(true):
     of Some(msg):
       check msg == "worked!"
