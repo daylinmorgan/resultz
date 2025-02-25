@@ -13,15 +13,22 @@ requires "https://github.com/daylinmorgan/resultz"
 ```nim
 import resultz # also exports vendored `results`
 
-proc failableThing(a: int): Result[int, string] =
+proc failWithError(a: int): Result[int, string] =
   if a > 0:
     result.ok(a)
   else:
     result.err "failed for no reason?"
 
-case failableThing(10)
+case failWithError(10)
 of Ok(a):
   echo "do something with ident `a`: " & $a
 of Err(e):
   echo "do something with error: " & e
+
+proc optionallyWork(a: int): Opt[int] =
+  if a > 0:
+    some(a)
 ```
+
+see [tests](./tests/) for additional usage examples.
+
