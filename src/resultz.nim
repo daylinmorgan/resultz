@@ -44,19 +44,26 @@ func branchKind(n: NimNode): Branch =
     result = parseEnum[Branch]($n)
   else: assert false
 
+func nimNodeFromResultBranch(branch: NimNode): NimNode =
+  if branch.len == 0:
+    ident"void"
+  else:
+    branch[0][1]
+
+func getTypeNodes(resultNode: NimNode): tuple[T: NimNode, E: NimNode] =
+  ## given a NimNode of type `Result*[T, E] = object` extract T and E as nodes
+  let resultImpl = getTypeImpl(resultNode)
+  let eTypeBranch = resultImpl[2][0][1][1]
+  let vTypeBranch = resultImpl[2][0][2][1]
+  result.E = nimNodeFromResultBranch(eTypeBranch)
+  result.T = nimNodeFromResultBranch(vTypeBranch)
+
+
 macro `case`*(n: Result): untyped =
   result = newStmtList()
 
-  let resultType = getTypeInst(n[0])
-  var T, E: NimNode
-
-  # This looks hacky and will probably break in some cases
-  T = resultType[1]
-  let isOpt = $resultType[0] == "Opt"
-  if isOpt:
-    E = ident"void"
-  else:
-    E = resultType[2]
+  var (T, E) = getTypeNodes(n[0])
+  let isOpt = E == ident"void"
 
   let
     tmp = genSym(nskLet)
@@ -81,9 +88,9 @@ macro `case`*(n: Result): untyped =
       case bk:
       of Ok, Some:
         if bk == Some and T.typeKind == ntyVoid:
-          error "Some should be used with Opt[T isnot void]/Result[T isnot void, void]"
+          error "Some should be used with Opt[T isnot void]/Result[T isnot void, E]"
 
-        elif T.typeKind != ntyVoid:
+        elif T.typeKind notin {ntyVoid, ntyNone}:
           checkIdent()
 
           let okIdent = it[0][1]

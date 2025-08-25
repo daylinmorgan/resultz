@@ -20,6 +20,10 @@ proc f2(ok: bool): Opt[string] =
   if ok:
     result.ok "worked!"
 
+proc f3(ok: bool): Result[void, string] =
+  if ok: ok()
+  else: err "failed!"
+
 suite "caseStmt":
   test "ok/err":
     case f(true):
@@ -29,6 +33,11 @@ suite "caseStmt":
 
     case f(false):
     of Ok(msg): discard
+    of Err(e):
+      check e == "failed!"
+
+    case f3(false):
+    of Ok(): discard
     of Err(e):
       check e == "failed!"
 
@@ -42,3 +51,14 @@ suite "caseStmt":
     of Some(_): discard
     of None():
       check true
+
+  test "type alias/generics":
+    type R[T] = Result[T, string]
+    proc f3(ok: bool): R[string] =
+      if ok: ok "worked!"
+      else: err "failed!"
+
+    case f3(true):
+    of Ok(v): check v == "worked!"
+    of Err(e): discard
+
