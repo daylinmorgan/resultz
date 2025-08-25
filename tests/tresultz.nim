@@ -8,8 +8,7 @@ suite "helper templates":
       raise newException(IOError, "This is IO speaking, Er Yes you can!")
 
     let r = catchMsg: raisingProc()
-    check r == Result[int, string].err("This is IO speaking, Er Yes you can!")
-
+    check r == Result[int, string].err("IOError: This is IO speaking, Er Yes you can!")
 
 proc f(ok: bool): Result[string, string] =
   if ok:

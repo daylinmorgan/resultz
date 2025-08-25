@@ -20,7 +20,7 @@ template catchMsg*(body: typed): Result[type(body), string] =
     else:
       R.ok(body)
   except CatchableError as eResultPrivate:
-    R.err(eResultPrivate.msg)
+    R.err($eResultPrivate.name &  ": " & eResultPrivate.msg)
 
 template bailMsg*(m: string, body: untyped) =
   ## wrapper for try except to swallow compiler error and return with err(m)
